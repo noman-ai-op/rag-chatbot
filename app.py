@@ -27,11 +27,45 @@ TOP_K = 3   # how many relevant chunks to retrieve per question
 DISTANCE_THRESHOLD = 1.6
 
 # ---------- SETUP (cached so it only loads once, not on every question) ----------
+DOCUMENT_PATH = "sample_docs/project_readme.md"
+CHUNK_SIZE = 500
+CHUNK_OVERLAP = 50
+
+def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=CHUNK_OVERLAP):
+    """Simple sliding-window chunker (same logic as ingest.py)."""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        start += chunk_size - overlap
+    return chunks
+
 @st.cache_resource
 def load_resources():
     embedder = SentenceTransformer("all-MiniLM-L6-v2")
     chroma_client = chromadb.PersistentClient(path="./chroma_db")
-    collection = chroma_client.get_collection(name="project_docs")
+
+    # Self-building: if this is a fresh environment (e.g. a new deployment
+    # where chroma_db doesn't exist yet), build it automatically instead
+    # of requiring ingest.py to have been run manually beforehand.
+    try:
+        collection = chroma_client.get_collection(name="project_docs")
+    except Exception:
+        with open(DOCUMENT_PATH, "r", encoding="utf-8") as f:
+            text = f.read()
+        chunks = chunk_text(text)
+        embeddings = embedder.encode(chunks).tolist()
+
+        collection = chroma_client.get_or_create_collection(name="project_docs")
+        collection.add(
+            documents=chunks,
+            embeddings=embeddings,
+            ids=[f"chunk_{i}" for i in range(len(chunks))],
+        )
+
     groq_client = Groq(api_key=GROQ_API_KEY)
     return embedder, collection, groq_client
 
